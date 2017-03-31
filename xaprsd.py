@@ -15,11 +15,18 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import asyncio
+import base64
 import functools
 import re
 import signal
 
-import xml.sax.saxutils
+import pygments
+import pygments.lexers
+import pygments.formatters
+
+import lxml.builder
+import lxml.etree
+import lxml.sax
 
 import aioxmpp.xso
 import aioxmpp.xml
@@ -49,6 +56,18 @@ class APRS1(aioxmpp.xso.XSO):
     body = aioxmpp.xso.Text()
 
 
+def is_valid_cdata_str(s):
+    for c in s:
+        o = ord(c)
+        if o >= 32:
+            continue
+        if o < 9 or 11 <= o <= 12 or 14 <= o <= 31:
+            return False
+
+    return True
+
+
+# add support for our X-APRS payloads
 aioxmpp.Message.xep0080_geoloc = aioxmpp.xso.Child([GeoLoc])
 aioxmpp.Message.xaprs_aprs1 = aioxmpp.xso.Child([APRS1])
 
@@ -58,18 +77,25 @@ aioxmpp.Message.from_.xq_descriptor.type_ = aioxmpp.xso.String()
 aioxmpp.Message.to.xq_descriptor.type_ = aioxmpp.xso.String()
 
 
-def _fast_characters(self, s):
-    self._finish_pending_start_element()
-    self._write(xml.sax.saxutils.escape(s).encode("utf-8"))
+# def _fast_characters(self, s):
+#     self._finish_pending_start_element()
+#     self._write(xml.sax.saxutils.escape(s).encode("utf-8"))
 
 
-# increase performance by removing the validity check for character data
-aioxmpp.xml.XMPPXMLGenerator.characters = _fast_characters
+# # increase performance by removing the validity check for character data
+# aioxmpp.xml.XMPPXMLGenerator.characters = _fast_characters
 
 
 CLIENTS = {}
 TO_REAP = []
 MESSAGE_ID_CTR = 0
+
+LEXER = pygments.lexers.get_lexer_by_name("xml")
+FORMATTER = pygments.formatters.TerminalFormatter()
+
+
+def pygmentise_xml(code):
+    return pygments.highlight(code, LEXER, FORMATTER)
 
 
 def tocall2version(tocall):
@@ -142,15 +168,18 @@ def parse_aprs1(postline):
 
 
 @asyncio.coroutine
-def _handle_client(callsign, stream_reader, stream_writer):
+def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
     # this doesn’t work with Debian stable
-    # sock = stream_writer.transport.get_extra_info("socket")
+    sock = stream_writer.transport.get_extra_info("socket")
+    print(sock.getsockname())
     # try:
     #     # we don’t want to receive anything
     #     sock.shutdown(socket.SHUT_RD)
     # except OSError:
     #     pass
     # del stream_reader
+
+    makeelement = lxml.builder.ElementMaker(nsmap={None: "jabber:client"})
 
     # queue at most three messages
     queue = asyncio.Queue(maxsize=3)
@@ -171,7 +200,19 @@ def _handle_client(callsign, stream_reader, stream_writer):
     try:
         while True:
             item = yield from queue.get()
-            xml_writer.send(item)
+            handler = lxml.sax.ElementTreeContentHandler(makeelement)
+            item.unparse_to_sax(handler)
+            prettyprinted = lxml.etree.tostring(
+                handler.etree,
+                pretty_print=True
+            )
+            if pygmentise:
+                prettyprinted = pygmentise_xml(
+                    prettyprinted.decode("utf-8")
+                ).encode(
+                    "utf-8"
+                )
+            stream_writer.write(prettyprinted)
             # dirty hack
             yield from asyncio.sleep(0)
             yield from stream_writer.drain()
@@ -192,6 +233,9 @@ def parse_and_forward(binary_line, text_line):
     global MESSAGE_ID_CTR
 
     from_, _, to, _, geocoords, body, _ = parse_aprs1(text_line)
+
+    if not is_valid_cdata_str(body):
+        body = None
 
     msg = aioxmpp.Message(
         type_=aioxmpp.MessageType.NORMAL,
@@ -214,6 +258,11 @@ def parse_and_forward(binary_line, text_line):
         legacy_line = binary_line.decode("latin1")
     except UnicodeDecodeError:
         legacy_line = text_line
+
+    # iff the data contains non-printables, we must to wrap it in
+    # base64
+    if not is_valid_cdata_str(legacy_line):
+        legacy_line = base64.b64encode(binary_line).decode("ascii")
     msg.xaprs_aprs1.body = legacy_line.rstrip()
 
     MESSAGE_ID_CTR += 1
@@ -302,9 +351,15 @@ def main(loop, aprs_server, aprs_port, callsign, listen_port):
     stop_signal = asyncio.Event()
     loop.add_signal_handler(signal.SIGINT, stop_signal.set)
 
-    server = yield from asyncio.start_server(
-        functools.partial(_handle_client, callsign),
+    server_plain = yield from asyncio.start_server(
+        functools.partial(_handle_client, callsign, False),
         port=listen_port,
+        loop=loop,
+    )
+
+    server_pretty = yield from asyncio.start_server(
+        functools.partial(_handle_client, callsign, True),
+        port=listen_port+1,
         loop=loop,
     )
 
@@ -333,8 +388,10 @@ def main(loop, aprs_server, aprs_port, callsign, listen_port):
         tasks_to_cancel.insert(1, reaper_task)
         for task in tasks_to_cancel:
             task.cancel()
-        server.close()
-        yield from server.wait_closed()
+        server_plain.close()
+        server_pretty.close()
+        yield from server_plain.wait_closed()
+        yield from server_pretty.wait_closed()
         for task in tasks_to_cancel:
             try:
                 yield from task
