@@ -93,6 +93,8 @@ MESSAGE_ID_CTR = 0
 LEXER = pygments.lexers.get_lexer_by_name("xml")
 FORMATTER = pygments.formatters.TerminalFormatter()
 
+MAKEELEMENT = lxml.builder.ElementMaker(nsmap={None: "jabber:client"})
+
 
 def pygmentise_xml(code):
     return pygments.highlight(code, LEXER, FORMATTER)
@@ -179,8 +181,6 @@ def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
     #     pass
     # del stream_reader
 
-    makeelement = lxml.builder.ElementMaker(nsmap={None: "jabber:client"})
-
     # queue at most three messages
     queue = asyncio.Queue(maxsize=3)
     me = asyncio.Task.current_task()
@@ -199,20 +199,7 @@ def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
     CLIENTS[me] = queue
     try:
         while True:
-            item = yield from queue.get()
-            handler = lxml.sax.ElementTreeContentHandler(makeelement)
-            item.unparse_to_sax(handler)
-            prettyprinted = lxml.etree.tostring(
-                handler.etree,
-                pretty_print=True
-            )
-            prettyprinted = prettyprinted.replace(
-                b"\n", b"\r\n"
-            ).replace(
-                # I feel bad for even thinking about this
-                b' xmlns="jabber:client"',
-                b'',
-            )
+            prettyprinted = yield from queue.get()
             if pygmentise:
                 prettyprinted = pygmentise_xml(
                     prettyprinted.decode("utf-8")
@@ -274,9 +261,23 @@ def parse_and_forward(binary_line, text_line):
 
     MESSAGE_ID_CTR += 1
 
+    handler = lxml.sax.ElementTreeContentHandler(MAKEELEMENT)
+    msg.unparse_to_sax(handler)
+    prettyprinted = lxml.etree.tostring(
+        handler.etree,
+        pretty_print=True
+    )
+    prettyprinted = prettyprinted.replace(
+        b"\n", b"\r\n"
+    ).replace(
+        # I feel bad for even thinking about this
+        b' xmlns="jabber:client"',
+        b'',
+    )
+
     for queue in CLIENTS.values():
         try:
-            queue.put_nowait(msg)
+            queue.put_nowait(prettyprinted)
         except asyncio.QueueFull:
             pass
 
