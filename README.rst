@@ -7,6 +7,7 @@ Dependencies
 ------------
 
 * [``aioxmpp``](https://github.com/horazont/aioxmpp) 0.8 (0.9 will not work, as this tool foolishly abuses internals)
+* pygments
 
 
 Usage
