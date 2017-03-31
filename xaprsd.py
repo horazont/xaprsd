@@ -170,7 +170,7 @@ def parse_aprs1(postline):
 
 
 @asyncio.coroutine
-def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
+def _handle_client(callsign, pygmentise, admin, stream_reader, stream_writer):
     # this doesn’t work with Debian stable
     sock = stream_writer.transport.get_extra_info("socket")
     print(sock.getsockname())
@@ -194,7 +194,8 @@ def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
         b"\n"
         b"<!-- Welcome to xaprsd. Have fun with your stream! \n"
         b"     This software is licensed under AGPLv3. \n"
-        b"     Get the source code at https://github.com/horazont/xaprsd -->"
+        b"     Get the source code at https://github.com/horazont/xaprsd \n"
+        b"     Problems with this feed? contact "+admin.encode("utf-8")+b" -->"
         b"\n")
     CLIENTS[me] = queue
     try:
@@ -355,18 +356,18 @@ def reaper():
 
 
 @asyncio.coroutine
-def main(loop, aprs_server, aprs_port, callsign, listen_port):
+def main(loop, aprs_server, aprs_port, callsign, listen_port, admin):
     stop_signal = asyncio.Event()
     loop.add_signal_handler(signal.SIGINT, stop_signal.set)
 
     server_plain = yield from asyncio.start_server(
-        functools.partial(_handle_client, callsign, False),
+        functools.partial(_handle_client, callsign, False, admin),
         port=listen_port,
         loop=loop,
     )
 
     server_pretty = yield from asyncio.start_server(
-        functools.partial(_handle_client, callsign, True),
+        functools.partial(_handle_client, callsign, True, admin),
         port=listen_port+1,
         loop=loop,
     )
@@ -419,6 +420,10 @@ if __name__ == "__main__":
         help="Callsign to use to log into the APRS server"
     )
     parser.add_argument(
+        "admin",
+        help="Admin contact to show in the header",
+    )
+    parser.add_argument(
         "--aprs-port",
         type=int,
         default=10152,
@@ -441,6 +446,7 @@ if __name__ == "__main__":
             args.aprs_port,
             args.callsign,
             args.listen_port,
+            args.admin,
         ))
     finally:
         loop.close()
