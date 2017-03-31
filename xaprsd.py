@@ -20,6 +20,8 @@ import functools
 import re
 import signal
 
+from datetime import datetime
+
 import pygments
 import pygments.lexers
 import pygments.formatters
@@ -31,9 +33,49 @@ import lxml.sax
 import aioxmpp.xso
 import aioxmpp.xml
 
+from aioxmpp.utils import namespaces
+
 
 if not hasattr(asyncio, "ensure_future"):
     asyncio.ensure_future = getattr(asyncio, "async")
+
+
+namespaces.xep0297_forward = "urn:xmpp:forward:0"
+namespaces.xep0203_delay = "urn:xmpp:delay"
+
+
+aioxmpp.Message.DECLARE_NS[None] = "jabber:client"
+
+
+class Delay(aioxmpp.xso.XSO):
+    TAG = namespaces.xep0203_delay, "delay"
+
+    from_ = aioxmpp.xso.Attr(
+        "from",
+        type_=aioxmpp.xso.JID(),
+        default=None,
+    )
+
+    stamp = aioxmpp.xso.Attr(
+        "stamp",
+        type_=aioxmpp.xso.DateTime(),
+    )
+
+    reason = aioxmpp.xso.Text(
+        default=None
+    )
+
+
+class Forwarded(aioxmpp.xso.XSO):
+    TAG = namespaces.xep0297_forward, "forwarded"
+
+    delay = aioxmpp.xso.Child([Delay])
+
+    stanza = aioxmpp.xso.Child(
+        [
+            aioxmpp.Message,
+        ]
+    )
 
 
 class GeoLoc(aioxmpp.xso.XSO):
@@ -70,6 +112,7 @@ def is_valid_cdata_str(s):
 # add support for our X-APRS payloads
 aioxmpp.Message.xep0080_geoloc = aioxmpp.xso.Child([GeoLoc])
 aioxmpp.Message.xaprs_aprs1 = aioxmpp.xso.Child([APRS1])
+aioxmpp.Message.xaprs_forwarded = aioxmpp.xso.Child([Forwarded])
 
 # increase performance: callsigns are always valid JIDs, we don’t need
 # validation here
@@ -224,7 +267,7 @@ def _handle_client(callsign, pygmentise, admin, stream_reader, stream_writer):
             pass
 
 
-def parse_and_forward(binary_line, text_line):
+def parse_and_forward(callsign, binary_line, text_line):
     global MESSAGE_ID_CTR
 
     from_, _, to, _, geocoords, body, _ = parse_aprs1(text_line)
@@ -237,7 +280,6 @@ def parse_and_forward(binary_line, text_line):
         from_=from_,
         to=to,
     )
-    msg.id_ = "aprs-f{:03d}".format(MESSAGE_ID_CTR)
     if body:
         msg.body[None] = body
     if geocoords is not None:
@@ -260,10 +302,21 @@ def parse_and_forward(binary_line, text_line):
         legacy_line = base64.b64encode(binary_line).decode("ascii")
     msg.xaprs_aprs1.body = legacy_line.rstrip()
 
+    wrapper = aioxmpp.Message(
+        type_=aioxmpp.MessageType.NORMAL,
+        from_=callsign,
+        to="APRS",
+    )
+    wrapper.id_ = "aprs-f{:03d}".format(MESSAGE_ID_CTR)
+    wrapper.xaprs_forwarded = Forwarded()
+    wrapper.xaprs_forwarded.delay = Delay()
+    wrapper.xaprs_forwarded.delay.stamp = datetime.utcnow()
+    wrapper.xaprs_forwarded.stanza = msg
+
     MESSAGE_ID_CTR += 1
 
-    handler = lxml.sax.ElementTreeContentHandler(MAKEELEMENT)
-    msg.unparse_to_sax(handler)
+    handler = lxml.sax.ElementTreeContentHandler()
+    wrapper.unparse_to_sax(handler)
     prettyprinted = lxml.etree.tostring(
         handler.etree,
         pretty_print=True
@@ -319,7 +372,7 @@ def _aprs_client(server, port, callsign):
             if text_line.startswith("#"):
                 continue
             try:
-                parse_and_forward(line, text_line)
+                parse_and_forward(callsign, line, text_line)
             except Exception as exc:
                 print(
                     "failed to parse and forward APRS message ({}):"
