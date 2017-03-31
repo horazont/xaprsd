@@ -206,6 +206,13 @@ def _handle_client(callsign, pygmentise, stream_reader, stream_writer):
                 handler.etree,
                 pretty_print=True
             )
+            prettyprinted = prettyprinted.replace(
+                b"\n", b"\r\n"
+            ).replace(
+                # I feel bad for even thinking about this
+                b' xmlns="jabber:client"',
+                b'',
+            )
             if pygmentise:
                 prettyprinted = pygmentise_xml(
                     prettyprinted.decode("utf-8")
