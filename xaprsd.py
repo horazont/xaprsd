@@ -359,6 +359,7 @@ def reaper():
 def main(loop, aprs_server, aprs_port, callsign, listen_port, admin):
     stop_signal = asyncio.Event()
     loop.add_signal_handler(signal.SIGINT, stop_signal.set)
+    loop.add_signal_handler(signal.SIGTERM, stop_signal.set)
 
     server_plain = yield from asyncio.start_server(
         functools.partial(_handle_client, callsign, False, admin),
