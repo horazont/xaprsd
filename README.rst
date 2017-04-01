@@ -1,7 +1,7 @@
 X-APRS Daemon
 #############
 
-Convert an APRS feed into an X-APRS feed. This is an implementation of an X-APRS feed as proposed by Georg Lukas.
+Convert an APRS feed into an X-APRS feed. This is an implementation of an X-APRS feed as proposed by `Georg Lukas on aprsdroid.org <https://aprsdroid.org/xaprs/>`_.
 
 Warning
 -------
