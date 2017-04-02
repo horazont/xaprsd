@@ -1,6 +1,8 @@
 X-APRS Daemon
 #############
 
+**Danger:** Note the announcement on the top of the blog post. For this reason, this software will vanish from github in the next few days.
+
 Convert an APRS feed into an X-APRS feed. This is an implementation of an X-APRS feed as proposed by `Georg Lukas on aprsdroid.org <https://aprsdroid.org/xaprs/>`_.
 
 Warning
